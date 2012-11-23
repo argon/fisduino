@@ -26,14 +26,16 @@ void setup() {
   
   PORTD |= clockHigh;
   PORTD |= dataHigh;
-  displayOn();
+  //displayOn();
+  displayText("                ");
 }
 
 void loop() {
-  displayText(" HELLO   WORLD! ");
+  
+  //displayText(" HELLO   WORLD! ");
   //displayText("UK-MKIVS  .NET  ");
-  //displayText("FM1 1 TPRADIO 1 ");
-  delay(1000);
+  displayText("FM1 1 TPRADIO 1 ");
+  delay(10000);
 }
 
 void displayOn() {
@@ -51,6 +53,7 @@ void displayOn() {
 }
 
 void displayText(char* text) {
+  digitalWrite(13, HIGH);
   checksum = 0;
   
   PORTD |= enableHigh;
@@ -64,15 +67,16 @@ void displayText(char* text) {
   
   int i = 0;
   while(text[i]) {
-    if(text[i] == ' ') {
+    /*if(text[i] == ' ') {
       sendPacket(28);
     }
-    else {
+    else {*/
       sendPacket(text[i]);
-    }
+    //}
     i++;
   }
   sendChecksum();
+  digitalWrite(13, LOW);
 }
 
 void sendPacket(int value) {
@@ -92,7 +96,7 @@ void sendChecksum() {
   PORTD &= enableLow;
   delayMicroseconds(50);
   PORTD |= enableHigh;
-  delay(4);
+  //delay(4);
   checksum = 0;
 }
 
@@ -113,4 +117,24 @@ void sendByte(int value) {
   }
   PORTD |= dataHigh;
   sei();
+}
+
+int readByte() {
+  cli();
+  int i;
+  int value = 0;
+  for(i=128; i>0; i>>=1) {
+    PORTD &= clockLow;
+    delayMicroseconds(13);
+    PORTD |= clockHigh;
+    if(PORTD & dataHigh) {
+      value |= i;
+    }
+    else {
+      value &= ~i;
+    }
+    delayMicroseconds(12);
+  }
+  sei();
+  return value;
 }
