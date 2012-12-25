@@ -19,6 +19,16 @@
 #define HU_SEL    171
 #define HU_MODE   247
 
+#define POT_WIPER0 B00000000
+#define POT_WIPER1 B00010000
+#define POT_TCON   B01000000
+#define POT_STATUS B01010000
+
+#define POT_WRITE  B00000000
+#define POT_INCR   B00000100
+#define POT_DECR   B00001000
+#define POT_READ   B00001100
+
 #define remoteStart 0x55d5
 #define remoteVOLUP 0x55ba
 #define remoteVOLDN 0x55bb
@@ -67,6 +77,8 @@ void setup() {
 
   pinMode(remoteOutputSelect, OUTPUT);
   digitalWrite(remoteOutputSelect, HIGH);
+  
+  stopRemoteSignal();
   
   PORTD |= clockHigh;
   PORTD |= dataHigh;
@@ -233,36 +245,23 @@ int readByte() {
   return value;
 }
 
-void sendRemoteSignal(char value) {
+void sendRemoteSignal(int value) {
   /*
-  // http://www.farnell.com/datasheets/12247.pdf
-  Command Byte
-  X X C1 C0 X X P1 P0
+  // http://ww1.microchip.com/downloads/en/DeviceDoc/22060b.pdf
+  MCP415X
   
-  C1 C0 Command Command Summary
-  0 0 None No Command will be executed.
-  0 1 Write Data Write the data contained in Data Byte to the 
-      potentiometer(s) determined by the potentiometer selection bits.
-  1 0 Shutdown Potentiometer(s) determined by potentiometer selection bits will enter Shutdown Mode. 
-      Data bits for this command are ‘don’t cares’.
-  1 1 None No Command will be executed.
-  
-  P1* P0 Potentiometer Selections
-  0 0 Dummy Code: Neither Potentiometer affected.
-  0 1 Command executed on Potentiometer 0.
-  1 0 Command executed on Potentiometer 1.
-  1 1 Command executed on both Potentiometers.
   */
-  
   digitalWrite(remoteOutputSelect, LOW);
-  SPI.transfer(B00010001);
-  SPI.transfer(~value);
+  SPI.transfer(POT_WIPER0 | POT_WRITE);
+  SPI.transfer(value);
+  SPI.transfer(POT_TCON | POT_WRITE);
+  SPI.transfer(B00001011);
   digitalWrite(remoteOutputSelect, HIGH);
 }
 
 void stopRemoteSignal() {
   digitalWrite(remoteOutputSelect, LOW);
-  SPI.transfer(B00100001);
-  SPI.transfer(B00000000);
+  SPI.transfer(POT_TCON | POT_WRITE);
+  SPI.transfer(B00001000);
   digitalWrite(remoteOutputSelect, HIGH);
 }
