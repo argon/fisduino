@@ -1,23 +1,35 @@
-
-#include "SPI.h"
+#include <SPI.h>
+#include <Ethernet.h>
+#include <PubSubClient.h>
 
 #define FISenablePin 2
 #define FISdataPin 3
 #define FISclockPin 4
 #define FISremotePin 5
 
-#define remoteOutputSelect 10
+#define remoteOutputSelect 6
 
-// RM-X4S Values for 50K/256 Digital Pot MCP41050
+/* RM-X4S Values for 50K/256 Digital Pot MCP41050
 #define HU_SOURCE  11
-#define HU_MUTE    22
-#define HU_LIST    33
-#define HU_SEEKUP  44
-#define HU_SEEKDN  61
-#define HU_VOLUP   85
-#define HU_VOLDN  120
-#define HU_SEL    171
-#define HU_MODE   247
+#define HU_MUTE    23
+#define HU_LIST    35
+#define HU_SEEKUP  47
+#define HU_SEEKDN  65
+#define HU_VOLUP   90
+#define HU_VOLDN  127
+#define HU_SEL    181
+#define HU_MODE   255
+*/
+
+// Pioneer values for 50K/256 Digital Pot
+#define HU_SOURCE   6
+#define HU_MUTE    18
+#define HU_LIST    29
+#define HU_SEEKUP  41
+#define HU_SEEKDN  58
+#define HU_VOLUP   82
+#define HU_VOLDN  123
+#define HU_SEL    255
 
 #define POT_WIPER0 B00000000
 #define POT_WIPER1 B00010000
@@ -29,11 +41,13 @@
 #define POT_DECR   B00001000
 #define POT_READ   B00001100
 
-#define remoteStart 0x55d5
-#define remoteVOLUP 0x55ba
-#define remoteVOLDN 0x55bb
-#define remoteSEEKUP 0x55ca
-#define remoteSEEKDN 0x55cb
+#define remoteStart 0x5FD8
+#define remoteVOLUP 0x556B
+#define remoteVOLDN 0x556A
+#define remoteSEEKUP 0x555F
+#define remoteSEEKDN 0x555B
+
+#define remoteDebounce 25
 
 const char enableHigh = (1 << FISenablePin);
 const char enableLow = ~enableHigh;
@@ -49,9 +63,29 @@ const char remoteLow = ~remoteHigh;
 #define rsHigh (remoteHigh & PIND)
 #define rsLow  (remoteHigh & (~PIND))
 
-unsigned int screenRedraw = 10000;
+byte mac[]     = { 0xDF, 0xDE, 0xBA, 0xF3, 0xF3, 0x3D};
+byte server[]  = { 178, 79, 174, 155 };
+byte ip[]      = { 172, 16, 0, 100 };
+
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+
+EthernetClient ethClient;
+PubSubClient client(server, 1883, mqttCallback, ethClient);
+
+typedef void (* menuAction) ();
+typedef struct menuItem menuItem_t;
+
+struct menuItem {
+  menuItem_t *nextItem;
+  menuItem_t *prevItem;
+  menuAction incAction;
+  menuAction decAction;
+};
+
 unsigned int lastTime = 0;
-unsigned int lastDraw = 0;
+
+unsigned int screenRedraw = 1000;
+unsigned int nextDraw = 0;
 unsigned int checksum = 0;
 
 char displayBuffer[17] = "                ";
@@ -59,7 +93,7 @@ char displayBuffer[17] = "                ";
 unsigned long remoteChanged = 0;
 unsigned long remotePart1 = 0;
 unsigned long remotePart2 = 0;
-unsigned int lastSignal = 0;
+unsigned int lastRemoteSignal = 0;
 
 
 void setup() {
@@ -87,29 +121,49 @@ void setup() {
 
 void loop() {
   lastTime = millis();
-  if(lastDraw < lastTime) {
-    displayText("FM1 1 TPRADIO 1 ");
-    lastDraw = lastTime + screenRedraw;
-  }
+/*  if(nextDraw < lastTime) {
+    displayText(displayBuffer);
+    nextDraw = lastTime + screenRedraw;
+  }*/
   
   if(rsLow) {
     // Begin reading the remote input
     if(remotePart1 != 0 || remotePart2 != 0) {
-      Serial.println(lastSignal - lastTime);
-      lastSignal = lastTime;
+      lastRemoteSignal = lastTime + remoteDebounce;
     }
     else {
       readRemote();
     }
   }
   
-  if(lastSignal > 0) {
-    if((lastSignal + 150) < lastTime) {
-       Serial.println("Button up");
+  if(lastRemoteSignal > 0) {
+    if(lastRemoteSignal < lastTime) {
+       buttonUp();
        remotePart1 = 0;
        remotePart2 = 0; 
-       lastSignal = 0;
+       lastRemoteSignal = 0;
     }
+  }
+}
+
+void buttonUp() {
+  stopRemoteSignal();
+}
+
+void buttonDown() {
+  switch(remotePart2) {
+     case remoteVOLUP:
+       sendRemoteSignal(HU_VOLUP);
+       break;
+     case remoteVOLDN:
+       sendRemoteSignal(HU_VOLDN);
+       break;
+     case remoteSEEKUP:
+       sendRemoteSignal(HU_SOURCE);
+       break;
+     case remoteSEEKDN:
+       sendRemoteSignal(HU_MUTE);
+       break;
   }
 }
 
@@ -142,26 +196,11 @@ void readRemote() {
     while(rsLow);
   }
   while(rsLow);
-  Serial.println("Button Down");
-  Serial.println(remotePart1, HEX);
-  Serial.println(remotePart2, HEX);
+  if(remotePart1 != remoteStart) return;
+  buttonDown();
 }
 
-void displayOn() {
-  // Initialise
-  digitalWrite(FISenablePin, HIGH);
-  delayMicroseconds(70);
-  digitalWrite(FISenablePin, LOW);
-  delayMicroseconds(30);
-  sendByte(129);
-  delayMicroseconds(1500);
-  PORTD |= enableHigh;
-  delay(6);
-  PORTD &= enableLow;
-  delay(4);
-}
-
-void displayText(char* text) {
+void displayOff() {
   checksum = 0;
   
   PORTD |= enableHigh;
@@ -174,13 +213,30 @@ void displayText(char* text) {
   sendPacket(240);
   
   int i = 0;
+  for(i=0; i<16; i++){
+      sendPacket(0);
+  }
+  sendChecksum();
+}
+
+void displayText(char* text) {
+  checksum = 0;
+  
+  PORTD |= enableHigh;
+  delayMicroseconds(59);
+  PORTD &= enableLow;
+  delayMicroseconds(20);
+  
+  int length = 0;
+  while(text[length]) length++;
+  
+  sendPacket(129);
+  sendPacket(length);
+  sendPacket(240);
+  
+  int i = 0;
   while(text[i]) {
-    /*if(text[i] == ' ') {
-      sendPacket(28);
-    }
-    else {*/
-      sendPacket(text[i]);
-    //}
+    sendPacket(text[i]);
     i++;
   }
   sendChecksum();
