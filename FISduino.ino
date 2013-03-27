@@ -1,6 +1,4 @@
 #include <SPI.h>
-#include <Ethernet.h>
-#include <PubSubClient.h>
 
 #define FISenablePin 2
 #define FISdataPin 3
@@ -67,11 +65,6 @@ byte mac[]     = { 0xDF, 0xDE, 0xBA, 0xF3, 0xF3, 0x3D};
 byte server[]  = { 178, 79, 174, 155 };
 byte ip[]      = { 172, 16, 0, 100 };
 
-void mqttCallback(char* topic, byte* payload, unsigned int length);
-
-EthernetClient ethClient;
-PubSubClient client(server, 1883, mqttCallback, ethClient);
-
 typedef void (* menuAction) ();
 typedef struct menuItem menuItem_t;
 
@@ -97,7 +90,9 @@ unsigned int lastRemoteSignal = 0;
 
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
+  Serial.println("Online");
+  
   
   SPI.begin();
   SPI.setDataMode(SPI_MODE0);
@@ -165,6 +160,7 @@ void buttonDown() {
        sendRemoteSignal(HU_MUTE);
        break;
   }
+  lastTime = millis() + 150;
 }
 
 void readRemote() {
@@ -279,26 +275,6 @@ void sendByte(int value) {
   }
   PORTD |= dataHigh;
   sei();
-}
-
-int readByte() {
-  cli();
-  int i;
-  int value = 0;
-  for(i=128; i>0; i>>=1) {
-    PORTD &= clockLow;
-    delayMicroseconds(13);
-    PORTD |= clockHigh;
-    if(PORTD & dataHigh) {
-      value |= i;
-    }
-    else {
-      value &= ~i;
-    }
-    delayMicroseconds(12);
-  }
-  sei();
-  return value;
 }
 
 void sendRemoteSignal(int value) {
