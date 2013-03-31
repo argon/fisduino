@@ -1,3 +1,6 @@
+#include <TinyGPS.h>
+#include <Ethernet.h>
+#include <PubSubClient.h>
 #include <SPI.h>
 
 #define FISenablePin 2
@@ -46,6 +49,9 @@
 #define remoteSEEKDN 0x555B
 
 #define remoteDebounce 25
+#define mqttReconnectDelay 30000
+
+#define clientId "golfduino"
 
 const char enableHigh = (1 << FISenablePin);
 const char enableLow = ~enableHigh;
@@ -61,9 +67,17 @@ const char remoteLow = ~remoteHigh;
 #define rsHigh (remoteHigh & PIND)
 #define rsLow  (remoteHigh & (~PIND))
 
-byte mac[]     = { 0xDF, 0xDE, 0xBA, 0xF3, 0xF3, 0x3D};
-byte server[]  = { 178, 79, 174, 155 };
-byte ip[]      = { 172, 16, 0, 100 };
+byte mac[]     = { 0xDE, 0xAA, 0xBA, 0xFE, 0xFE, 0xED };
+// Linode
+//byte server[]  = { 178, 79, 174, 155 };
+
+// Realtime
+byte server[] = { 129, 33, 26, 221 };
+
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+
+EthernetClient ethClient;
+PubSubClient client(server, 1883, mqttCallback, ethClient);
 
 typedef void (* menuAction) ();
 typedef struct menuItem menuItem_t;
@@ -88,16 +102,21 @@ unsigned long remotePart1 = 0;
 unsigned long remotePart2 = 0;
 unsigned int lastRemoteSignal = 0;
 
+unsigned int reconnectTime = 0;
+
+int isConnected = 0;
+
 
 void setup() {
-  Serial.begin(9600);
-  Serial.println("Online");
-  
+  Serial.begin(115200);
+  Serial.println("Setup");
   
   SPI.begin();
   SPI.setDataMode(SPI_MODE0);
   SPI.setClockDivider(SPI_CLOCK_DIV2);
   SPI.setBitOrder(MSBFIRST);
+  
+  Serial.println(Ethernet.begin(mac));
   
   pinMode(FISenablePin, OUTPUT);
   pinMode(FISdataPin, OUTPUT);
@@ -106,6 +125,7 @@ void setup() {
 
   pinMode(remoteOutputSelect, OUTPUT);
   digitalWrite(remoteOutputSelect, HIGH);
+  digitalWrite(10, HIGH);
   
   stopRemoteSignal();
   
@@ -139,6 +159,21 @@ void loop() {
        lastRemoteSignal = 0;
     }
   }
+  if(!client.loop()) {
+    if(isConnected) {
+      reconnectTime = lastTime + mqttReconnectDelay;
+      isConnected = false;
+    }
+    if(reconnectTime < lastTime) {
+      mqttConnect();
+    }
+  }
+}
+
+void mqttConnect() {
+  if(client.connect(clientId)) {
+    isConnected = true;
+  }
 }
 
 void buttonUp() {
@@ -160,7 +195,7 @@ void buttonDown() {
        sendRemoteSignal(HU_MUTE);
        break;
   }
-  lastTime = millis() + 150;
+  lastRemoteSignal = lastTime + remoteDebounce;
 }
 
 void readRemote() {
@@ -227,7 +262,7 @@ void displayText(char* text) {
   while(text[length]) length++;
   
   sendPacket(129);
-  sendPacket(length);
+  sendPacket(length + 2);
   sendPacket(240);
   
   int i = 0;
@@ -296,4 +331,14 @@ void stopRemoteSignal() {
   SPI.transfer(POT_TCON | POT_WRITE);
   SPI.transfer(B00001000);
   digitalWrite(remoteOutputSelect, HIGH);
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length)
+{
+    byte* p = (byte*)malloc(length);
+  // Copy the payload to the new buffer
+  memcpy(p,payload,length);
+  client.publish("outTopic", p, length);
+  // Free the memory
+  free(p);
 }
