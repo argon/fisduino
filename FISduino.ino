@@ -3,6 +3,7 @@
 #include <PubSubClient.h>
 #include <SPI.h>
 
+
 #define FISenablePin 2
 #define FISdataPin 3
 #define FISclockPin 4
@@ -68,6 +69,7 @@ const char remoteLow = ~remoteHigh;
 #define rsLow  (remoteHigh & (~PIND))
 
 byte mac[]     = { 0xDE, 0xAA, 0xBA, 0xFE, 0xFE, 0xED };
+byte ip[] = { 10, 0, 1, 240 };
 // Linode
 //byte server[]  = { 178, 79, 174, 155 };
 
@@ -78,6 +80,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length);
 
 EthernetClient ethClient;
 PubSubClient client(server, 1883, mqttCallback, ethClient);
+TinyGPS gps;
 
 typedef void (* menuAction) ();
 typedef struct menuItem menuItem_t;
@@ -91,11 +94,7 @@ struct menuItem {
 
 unsigned int lastTime = 0;
 
-unsigned int screenRedraw = 1000;
-unsigned int nextDraw = 0;
 unsigned int checksum = 0;
-
-char displayBuffer[17] = "                ";
 
 unsigned long remoteChanged = 0;
 unsigned long remotePart1 = 0;
@@ -104,19 +103,24 @@ unsigned int lastRemoteSignal = 0;
 
 unsigned int reconnectTime = 0;
 
+unsigned int GPSinited = 0;
+
+long lat, lon;
+unsigned long fix_age, time, date, speed, course;
+unsigned int changed = 0;
+
+char sendBuffer[50];
+
 int isConnected = 0;
 
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println("Setup");
+  Serial.begin(38400);
   
   SPI.begin();
   SPI.setDataMode(SPI_MODE0);
   SPI.setClockDivider(SPI_CLOCK_DIV2);
   SPI.setBitOrder(MSBFIRST);
-  
-  Serial.println(Ethernet.begin(mac));
   
   pinMode(FISenablePin, OUTPUT);
   pinMode(FISdataPin, OUTPUT);
@@ -131,16 +135,18 @@ void setup() {
   
   PORTD |= clockHigh;
   PORTD |= dataHigh;
-  displayText(displayBuffer);
+  displayOn();
+  
+  Ethernet.begin(mac, ip);
 }
 
 void loop() {
   lastTime = millis();
-/*  if(nextDraw < lastTime) {
-    displayText(displayBuffer);
-    nextDraw = lastTime + screenRedraw;
-  }*/
   
+  
+  /**
+   * MFSW Processing
+   */
   if(rsLow) {
     // Begin reading the remote input
     if(remotePart1 != 0 || remotePart2 != 0) {
@@ -159,20 +165,77 @@ void loop() {
        lastRemoteSignal = 0;
     }
   }
+  
+  /**
+   * MQTT Section
+   */
   if(!client.loop()) {
     if(isConnected) {
       reconnectTime = lastTime + mqttReconnectDelay;
       isConnected = false;
     }
-    if(reconnectTime < lastTime) {
+    if(reconnectTime <= lastTime) {
       mqttConnect();
     }
   }
+  
+  /**
+   * TinyGPS Section
+   */
+  while(Serial.available()) {
+    if(!GPSinited) {
+      startGPS();
+      GPSinited = 1;
+    }
+    int c = Serial.read();
+    if (gps.encode(c)) {
+      // retrieves +/- lat/long in 100000ths of a degree
+      gps.get_position(&lat, &lon, &fix_age);
+      speed = gps.speed();
+      course = gps.course();
+      changed = true;
+    }
+  }
+  if(changed) {
+    client.publish("golfduino/gps/latitude", ltoa(lat, sendBuffer, 10));
+    client.publish("golfduino/gps/longitude", ltoa(lon, sendBuffer, 10));
+    client.publish("golfduino/gps/speed", ltoa(speed, sendBuffer, 10));
+    changed = false;
+  }
+}
+
+void startGPS() {
+  // Set update frequency to 1Hz
+  //  Send PMTK220,1000 (old), 300,Interval,0,0,0,0 is new.
+  sendGPSPacket("PMTK300,2000,0,0,0,0");
+  
+  // Set NMEA Output
+  //  Send PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+  sendGPSPacket("PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+}
+
+void sendGPSPacket(char *packet) {
+  int checksum = 0;
+  char *checkString;
+  int length = strlen(packet);
+  for(int i=0; i<length; i++) {
+    checksum = checksum ^ packet[i];
+  }
+  
+  Serial.print("$");
+  Serial.print(packet);
+  Serial.print("*");
+  Serial.print(checksum, HEX);
+  Serial.print("\r\n");
 }
 
 void mqttConnect() {
-  if(client.connect(clientId)) {
+  if(client.connect(clientId, "golfduino/status", 0, true, "0")) {
     isConnected = true;
+    client.publish("golfduino/status", "1");
+  }
+  else {
+    reconnectTime = millis() + mqttReconnectDelay;
   }
 }
 
@@ -229,6 +292,10 @@ void readRemote() {
   while(rsLow);
   if(remotePart1 != remoteStart) return;
   buttonDown();
+}
+
+void displayOn() {
+  displayText("                ");
 }
 
 void displayOff() {
@@ -335,10 +402,10 @@ void stopRemoteSignal() {
 
 void mqttCallback(char* topic, byte* payload, unsigned int length)
 {
-    byte* p = (byte*)malloc(length);
+  return;
+  byte* p = (byte*)malloc(length);
   // Copy the payload to the new buffer
   memcpy(p,payload,length);
-  client.publish("outTopic", p, length);
   // Free the memory
   free(p);
 }
